@@ -1,7 +1,7 @@
 name: pantry_chef
 description: "Pick the ingredients you have and see which dishes you can cook."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+1  # build number (+N) is set by CI to the workflow run number
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

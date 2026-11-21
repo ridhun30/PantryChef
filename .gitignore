@@ -6,10 +6,14 @@ build/
 .pub-cache/
 .pub/
 *.iml
-*.lock
-android/
+.idea/
+# Only Android is built; the other platform folders aren't kept.
 ios/
 web/
 linux/
 macos/
 windows/
+# Never commit the signing key (it lives in the repository secrets).
+*.p12
+*.jks
+*.keystore

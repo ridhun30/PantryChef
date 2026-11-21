@@ -1,5 +1,6 @@
 import '../models/dish.dart';
 import '../models/ingredient.dart';
+import '../util/names.dart';
 import 'storage_service.dart';
 
 /// A small starter pantry so the app isn't empty on first launch.
@@ -24,9 +25,12 @@ StorageBundle seedData() {
   ];
   final ingredients = ingredientNames.map(Ingredient.create).toList();
 
-  Dish dish(String name, List<String> ingredientNames) => Dish.create(
+  // Seed dishes keep readable, name-based ids (dishes made in the app get
+  // unique ones).
+  Dish dish(String name, List<String> ingredientNames) => Dish(
+        id: nameKey(name),
         name: name,
-        ingredientIds: ingredientNames.map((n) => n.trim().toLowerCase()).toList(),
+        ingredientIds: ingredientNames.map(nameKey).toList(),
       );
 
   final dishes = [

@@ -1,0 +1,111 @@
+name: Build APK
+
+# Same flow as Torrent Study: every push to main is tested, built, signed with
+# the one permanent key and published as the fixed "latest" release, which the
+# app reads to update itself. Pull requests are tested and built only.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Publish only from main; pull requests and other branches just build.
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # what changed since the last build goes into version.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.50.1
+          cache: true
+
+      - name: Unpack the signing key
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_B64" ]; then
+            if [ "$PUBLISH" = "true" ]; then
+              echo "::error::SIGNING_KEYSTORE_B64 is missing - an APK signed with any other key cannot update the installed app."
+              exit 1
+            fi
+            echo "::warning::No signing key here; this test build is signed with a throwaway debug key and is not published."
+            exit 0
+          fi
+          echo "$SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          echo "SIGNING_KEYSTORE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      # The workflow run number is the build number (Android versionCode), so
+      # every build is newer than the one before and the app sees the update.
+      - name: Build
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Name the APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk PantryChef.apk
+
+      - name: Check the signature
+        if: env.SIGNING_KEYSTORE != ''
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --verbose --print-certs PantryChef.apk 2>&1 | grep -iE "verified|certificate (DN|SHA-256)|error|warn" | grep -v "WARNING: META-INF"
+          "$APKSIGNER" verify --print-certs PantryChef.apk 2>&1 | grep -q "CN=Pantry Chef"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: build/app/reports/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PantryChef-apk
+          path: PantryChef.apk
+
+      # version.json tells the app which version this is and what changed since the last build.
+      - name: Describe the version
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest -p version.json -O previous.json || echo '{}' > previous.json
+          python3 .github/version_json.py previous.json notes.md ${{ github.run_number }} > version.json
+          cat version.json
+
+      # A fixed "latest" release gives the phone one stable download link.
+      - name: Publish as the latest release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest PantryChef.apk version.json --title "Latest build" --notes-file notes.md
